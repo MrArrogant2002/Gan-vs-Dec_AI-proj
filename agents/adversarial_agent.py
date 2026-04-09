@@ -13,6 +13,8 @@ from tqdm.auto import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from agents.prompts import build_generation_prompt, build_rewrite_prompt
+from evaluation.visualization import plot_training_history
+from training.experiment_logger import ExperimentLogger
 from training.utils import (
     configure_logging,
     count_trainable_parameters,
@@ -239,19 +241,28 @@ class AdversarialAgent:
         )
         dataloader = DataLoader(dataset, batch_size=self.agent_config["batch_size"], shuffle=True)
         optimizer = AdamW(model.parameters(), lr=self.agent_config["lr"])
+        logger = ExperimentLogger(
+            config=self.config,
+            run_name=f"agent_{Path(output_dir).name}",
+            job_type="agent_finetune",
+            tags=["agent", "biogpt", "lora"],
+        )
 
         use_amp = self.device.type == "cuda"
         scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
         model.train()
         optimizer.zero_grad(set_to_none=True)
+        epoch_history: List[dict] = []
 
         for epoch in range(self.agent_config["finetune_epochs"]):
             progress = tqdm(dataloader, desc=f"agent finetune {epoch + 1}", leave=False)
+            epoch_losses: List[float] = []
             for step, batch in enumerate(progress, start=1):
                 batch = {key: value.to(model.device) for key, value in batch.items()}
                 with maybe_autocast(use_amp, self.device):
                     outputs = model(**batch)
                     loss = outputs.loss / self.agent_config["grad_accum_steps"]
+                epoch_losses.append(loss.item() * self.agent_config["grad_accum_steps"])
                 scaler.scale(loss).backward()
 
                 if step % self.agent_config["grad_accum_steps"] == 0 or step == len(dataloader):
@@ -259,15 +270,38 @@ class AdversarialAgent:
                     scaler.update()
                     optimizer.zero_grad(set_to_none=True)
                 progress.set_postfix(loss=f"{loss.item() * self.agent_config['grad_accum_steps']:.4f}")
+            epoch_metrics = {
+                "epoch": epoch + 1,
+                "finetune_loss": float(sum(epoch_losses) / max(len(epoch_losses), 1)),
+            }
+            epoch_history.append(epoch_metrics)
+            logger.log_metrics(epoch_metrics, step=epoch + 1, prefix="agent")
 
         model.save_pretrained(output_dir)
         self.tokenizer.save_pretrained(output_dir)
+        image_paths = {
+            "agent_finetune_curve": plot_training_history(
+                epoch_history,
+                Path(output_dir) / "agent_finetune_curve.png",
+                title="BioGPT Agent Fine-Tuning",
+            )
+        }
         summary = {
             "output_dir": str(output_dir),
             "trainable_parameters": trainable_parameters,
             "examples": len(examples),
+            "epoch_history": epoch_history,
         }
         save_json(summary, Path(output_dir) / "finetune_summary.json")
+        logger.log_metrics(
+            {
+                "trainable_parameters": trainable_parameters,
+                "examples": len(examples),
+            },
+            prefix="agent_summary",
+        )
+        logger.log_images_from_paths(image_paths)
+        logger.finish()
         LOGGER.info("Agent fine-tuning complete: %s", summary)
         return summary
 

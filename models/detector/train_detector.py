@@ -20,7 +20,9 @@ from transformers import (
     get_linear_schedule_with_warmup,
 )
 
-from evaluation.metrics import compute_classification_metrics
+from evaluation.metrics import build_prediction_rows, compute_classification_metrics
+from evaluation.visualization import generate_classification_plots, plot_training_history
+from training.experiment_logger import ExperimentLogger
 from training.utils import (
     configure_logging,
     ensure_dir,
@@ -164,7 +166,9 @@ def evaluate_model(
     model: PreTrainedModel,
     dataloader: DataLoader,
     device: torch.device,
-) -> dict:
+    threshold: float = 0.5,
+    return_predictions: bool = False,
+) -> dict | tuple[dict, List[int], List[float]]:
     model.eval()
     losses: List[float] = []
     labels: List[int] = []
@@ -179,8 +183,10 @@ def evaluate_model(
             scores = torch.softmax(outputs.logits, dim=-1)[:, 1]
             probabilities.extend(scores.detach().cpu().tolist())
 
-    metrics = compute_classification_metrics(labels, probabilities)
+    metrics = compute_classification_metrics(labels, probabilities, threshold=threshold)
     metrics["loss"] = float(sum(losses) / max(len(losses), 1))
+    if return_predictions:
+        return metrics, labels, probabilities
     return metrics
 
 
@@ -244,22 +250,32 @@ def train_detector(
 
     use_amp = detector_config.get("fp16", False) and device.type == "cuda"
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+    logger = ExperimentLogger(
+        config=config,
+        run_name=f"detector_{Path(output_dir).name}",
+        job_type="detector_train",
+        tags=["detector", "biobert"],
+    )
 
     best_metrics: Optional[dict] = None
     best_score = float("-inf")
     global_step = 0
+    epoch_history: List[dict] = []
+    best_prediction_payload: Optional[dict] = None
 
     LOGGER.info("Training detector on %s using %s", train_path, device)
     for epoch in range(detector_config["epochs_per_round"]):
         model.train()
         optimizer.zero_grad(set_to_none=True)
         progress = tqdm(train_loader, desc=f"detector epoch {epoch + 1}", leave=False)
+        train_losses: List[float] = []
 
         for step, batch in enumerate(progress, start=1):
             batch = {key: value.to(device) for key, value in batch.items()}
             with maybe_autocast(use_amp, device):
                 outputs = model(**batch)
                 loss = outputs.loss / detector_config["grad_accum_steps"]
+            train_losses.append(loss.item() * detector_config["grad_accum_steps"])
 
             scaler.scale(loss).backward()
 
@@ -272,13 +288,30 @@ def train_detector(
 
             progress.set_postfix(loss=f"{loss.item() * detector_config['grad_accum_steps']:.4f}")
 
-        val_metrics = evaluate_model(model, val_loader, device)
+        val_metrics, val_labels, val_probabilities = evaluate_model(
+            model,
+            val_loader,
+            device,
+            threshold=config["evaluation"].get("threshold", 0.5),
+            return_predictions=True,
+        )
+        epoch_metrics = {
+            "epoch": epoch + 1,
+            "train_loss": float(sum(train_losses) / max(len(train_losses), 1)),
+            **val_metrics,
+        }
+        epoch_history.append(epoch_metrics)
         LOGGER.info("Detector epoch %s validation metrics: %s", epoch + 1, val_metrics)
         current_score = val_metrics.get("f1", 0.0)
+        logger.log_metrics(epoch_metrics, step=epoch + 1, prefix="detector")
 
         if current_score >= best_score:
             best_score = current_score
             best_metrics = val_metrics
+            best_prediction_payload = {
+                "labels": val_labels,
+                "probabilities": val_probabilities,
+            }
             model.save_pretrained(output_dir)
             tokenizer.save_pretrained(output_dir)
             save_json(
@@ -287,15 +320,48 @@ def train_detector(
                     "train_path": str(train_path),
                     "val_path": str(val_path),
                     "global_step": global_step,
+                    "epoch_history": epoch_history,
                 },
                 Path(output_dir) / "training_summary.json",
             )
 
+    image_paths = {
+        "detector_training_curve": plot_training_history(
+            epoch_history,
+            Path(output_dir) / "detector_training_curve.png",
+            title="Detector Training History",
+        )
+    }
+    if best_prediction_payload:
+        prediction_frame = pd.DataFrame(
+            build_prediction_rows(
+                texts=val_frame["text"].astype(str).tolist(),
+                labels=best_prediction_payload["labels"],
+                probabilities=best_prediction_payload["probabilities"],
+                threshold=config["evaluation"].get("threshold", 0.5),
+            )
+        )
+        prediction_frame.to_csv(Path(output_dir) / "val_predictions.csv", index=False)
+        image_paths.update(
+            generate_classification_plots(
+                labels=best_prediction_payload["labels"],
+                probabilities=best_prediction_payload["probabilities"],
+                predictions=prediction_frame["predicted_label"].astype(int).tolist(),
+                output_dir=Path(output_dir),
+                prefix="val",
+            )
+        )
+        logger.log_dataframe("detector_val_predictions", prediction_frame)
+
+    logger.log_images_from_paths(image_paths)
     summary = {
         "output_dir": str(output_dir),
         "best_metrics": best_metrics or {},
         "steps": global_step,
+        "epoch_history": epoch_history,
     }
+    logger.log_metrics(summary["best_metrics"], prefix="detector_best")
+    logger.finish()
     LOGGER.info("Detector training complete: %s", summary)
     return summary
 

@@ -9,12 +9,14 @@ training, and full runtime validation.
 What is complete here:
 
 - Project structure and configuration
+- Environment placeholder file
 - Data preparation pipeline
 - BioBERT detector training and inference helpers
 - SeqGAN generator, discriminator, rollout, and trainer
 - BioGPT adversarial agent prompts, inference, and LoRA fine-tuning hooks
 - Round-based adversarial training loop
-- Evaluation utilities and metrics
+- Evaluation utilities, rich metrics, and visualizations
+- W&B experiment logging hooks
 - README and dependency manifest
 - RTX 3060-oriented plan updates
 
@@ -35,6 +37,7 @@ What was intentionally deferred on this machine:
 - `requirements.txt`
 - `agent-build-plan.md`
 - `implementation-complete.md`
+- `.env`
 
 ### Configuration
 
@@ -74,12 +77,14 @@ What was intentionally deferred on this machine:
 
 - `training/__init__.py`
 - `training/utils.py`
+- `training/experiment_logger.py`
 - `training/adversarial_loop.py`
 
 ### Evaluation
 
 - `evaluation/__init__.py`
 - `evaluation/metrics.py`
+- `evaluation/visualization.py`
 - `evaluation/eval_pipeline.py`
 
 ---
@@ -270,6 +275,7 @@ VRAM-oriented design choices:
 Implemented in:
 
 - `evaluation/metrics.py`
+- `evaluation/visualization.py`
 - `evaluation/eval_pipeline.py`
 
 Current capabilities:
@@ -278,18 +284,65 @@ Current capabilities:
   - accuracy
   - precision
   - recall
+  - specificity
   - F1
   - AUC
+  - PR-AUC
+  - balanced accuracy
+  - MCC
+  - Brier score
+  - log loss
+  - TP / TN / FP / FN counts
 - evasion rate computation
 - robustness delta computation
+- confidence-shift tracking for rewritten samples
 - rewrite quality via BERTScore when available
 - fallback lexical overlap score when BERTScore is unavailable
 - checkpoint evaluation on any split CSV
 - optional rewrite CSV integration during evaluation
+- prediction CSV export
+- confusion matrix plot generation
+- ROC curve plot generation
+- precision-recall plot generation
+- confidence histogram generation
 
 ---
 
-## 8. Utilities
+## 8. Experiment Tracking
+
+Implemented in `training/experiment_logger.py`.
+
+Current capabilities:
+
+- optional W&B initialization from config and `.env`
+- automatic fallback to no-op behavior if W&B is unavailable
+- metric logging
+- table logging
+- image logging for generated plots
+- separate run types for:
+  - detector training
+  - SeqGAN training
+  - agent fine-tuning
+  - adversarial loop
+  - evaluation
+
+---
+
+## 9. Environment Placeholders
+
+Implemented in `.env`.
+
+Current placeholders include:
+
+- Hugging Face token
+- W&B API key / project / entity / mode
+- cache directories
+- temp directory
+- dataset path placeholders
+
+---
+
+## 10. Utilities
 
 Implemented in `training/utils.py`.
 

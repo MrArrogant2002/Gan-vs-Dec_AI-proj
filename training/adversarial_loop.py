@@ -11,9 +11,11 @@ import torch
 
 from agents.adversarial_agent import AdversarialAgent, SuccessfulEvasionExample
 from evaluation.eval_pipeline import evaluate_detector_checkpoint
-from evaluation.metrics import compute_evasion_rate, compute_rewrite_quality, compute_robustness_delta
+from evaluation.metrics import compute_confidence_shift, compute_evasion_rate, compute_rewrite_quality, compute_robustness_delta
+from evaluation.visualization import plot_round_metrics
 from models.detector.train_detector import score_texts, train_detector
 from models.seqgan.train_seqgan import generate_fake_texts, train_seqgan
+from training.experiment_logger import ExperimentLogger
 from training.utils import configure_logging, ensure_dir, load_config, resolve_path, save_json, set_seed
 
 
@@ -87,7 +89,14 @@ def run_adversarial_loop(
             train_seqgan(config=config, output_dir=seqgan_checkpoint)
 
     metrics_dir = ensure_dir(resolve_path(config["evaluation"]["metrics_path"]))
+    plots_dir = ensure_dir(resolve_path(config["evaluation"]["plots_path"]))
     round_data_dir = ensure_dir(resolve_path(loop_config["round_data_dir"]))
+    logger = ExperimentLogger(
+        config=config,
+        run_name="adversarial_loop",
+        job_type="adversarial_loop",
+        tags=["adversarial-loop", "robustness"],
+    )
 
     baseline_metrics = evaluate_detector_checkpoint(
         config=config,
@@ -96,6 +105,7 @@ def run_adversarial_loop(
         output_path=metrics_dir / "baseline_metrics.json",
     )
     baseline_auc = baseline_metrics.get("auc", float("nan"))
+    logger.log_metrics(baseline_metrics, step=0, prefix="loop")
 
     history = [baseline_metrics | {"round": 0}]
     current_detector_checkpoint = detector_checkpoint
@@ -178,11 +188,23 @@ def run_adversarial_loop(
             rewrite_frame["original_text"].astype(str).tolist(),
             rewrite_frame["rewritten_text"].astype(str).tolist(),
         )
+        round_metrics.update(
+            compute_confidence_shift(
+                before=rewrite_frame["original_detector_confidence"].astype(float).tolist(),
+                after=rewrite_frame["detector_confidence"].astype(float).tolist(),
+            )
+        )
+        round_metrics["num_rewrites"] = int(len(rewrite_frame))
+        round_metrics["successful_evasions"] = int(
+            (rewrite_frame["detector_confidence"].astype(float) < config["agent"]["evasion_threshold"]).sum()
+        )
         round_metrics["robustness_delta"] = compute_robustness_delta(
             round_metrics.get("auc", float("nan")),
             baseline_auc,
         )
         history.append(round_metrics)
+        logger.log_metrics(round_metrics, step=round_index, prefix="loop")
+        logger.log_dataframe(f"round_{round_index:02d}_rewrites", rewrite_frame)
 
         successful_examples = [
             {
@@ -211,8 +233,11 @@ def run_adversarial_loop(
             release_cuda_memory()
 
         save_json({"history": history}, metrics_dir / "history.json")
+        plot_paths = plot_round_metrics(history, plots_dir)
+        logger.log_images_from_paths(plot_paths)
 
     summary = {"baseline": baseline_metrics, "history": history}
+    logger.finish()
     LOGGER.info("Adversarial loop finished.")
     return summary
 

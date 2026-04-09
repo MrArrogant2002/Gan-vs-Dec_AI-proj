@@ -15,9 +15,11 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 
 from evaluation.metrics import average_metrics
+from evaluation.visualization import plot_training_history
 from models.seqgan.discriminator import DiscriminatorConfig, SeqGANDiscriminator
 from models.seqgan.generator import GeneratorConfig, SeqGANGenerator
 from models.seqgan.rollout import RolloutPolicy
+from training.experiment_logger import ExperimentLogger
 from training.utils import configure_logging, ensure_dir, get_device, load_config, resolve_path, save_json, set_seed
 
 
@@ -140,6 +142,7 @@ def pretrain_generator(
     epochs: int,
     device: torch.device,
     gradient_clip_norm: float,
+    logger: ExperimentLogger | None = None,
 ) -> List[dict]:
     history: List[dict] = []
     generator.train()
@@ -154,7 +157,10 @@ def pretrain_generator(
             torch.nn.utils.clip_grad_norm_(generator.parameters(), gradient_clip_norm)
             optimizer.step()
             losses.append(loss.item())
-        history.append({"epoch": epoch + 1, "generator_pretrain_loss": float(sum(losses) / max(len(losses), 1))})
+        epoch_metrics = {"epoch": epoch + 1, "generator_pretrain_loss": float(sum(losses) / max(len(losses), 1))}
+        history.append(epoch_metrics)
+        if logger:
+            logger.log_metrics(epoch_metrics, step=epoch + 1, prefix="seqgan_generator_pretrain")
     return history
 
 
@@ -168,6 +174,7 @@ def pretrain_discriminator(
     bos_token_id: int,
     seq_len: int,
     lr: float,
+    logger: ExperimentLogger | None = None,
 ) -> List[dict]:
     optimizer = Adam(discriminator.parameters(), lr=lr)
     history: List[dict] = []
@@ -196,7 +203,10 @@ def pretrain_discriminator(
             loss.backward()
             optimizer.step()
             losses.append(loss.item())
-        history.append({"epoch": epoch + 1, "discriminator_pretrain_loss": float(sum(losses) / max(len(losses), 1))})
+        epoch_metrics = {"epoch": epoch + 1, "discriminator_pretrain_loss": float(sum(losses) / max(len(losses), 1))}
+        history.append(epoch_metrics)
+        if logger:
+            logger.log_metrics(epoch_metrics, step=epoch + 1, prefix="seqgan_discriminator_pretrain")
     return history
 
 
@@ -208,6 +218,7 @@ def adversarial_train(
     device: torch.device,
     bos_token_id: int,
     real_sequences: Sequence[Sequence[int]],
+    logger: ExperimentLogger | None = None,
 ) -> List[dict]:
     seqgan_config = config["seqgan"]
     g_optimizer = Adam(generator.parameters(), lr=seqgan_config["lr_g"])
@@ -254,13 +265,14 @@ def adversarial_train(
         d_optimizer.step()
 
         rollout.update_params(generator)
-        history.append(
-            {
-                "epoch": epoch + 1,
-                "generator_adversarial_loss": float(g_loss.detach().cpu().item()),
-                "discriminator_adversarial_loss": float(d_loss.detach().cpu().item()),
-            }
-        )
+        epoch_metrics = {
+            "epoch": epoch + 1,
+            "generator_adversarial_loss": float(g_loss.detach().cpu().item()),
+            "discriminator_adversarial_loss": float(d_loss.detach().cpu().item()),
+        }
+        history.append(epoch_metrics)
+        if logger:
+            logger.log_metrics(epoch_metrics, step=epoch + 1, prefix="seqgan_adversarial")
     return history
 
 
@@ -366,6 +378,12 @@ def train_seqgan(
     set_seed(config["project"]["seed"])
     seqgan_config = config["seqgan"]
     device = get_device(config["project"].get("device", "auto"))
+    logger = ExperimentLogger(
+        config=config,
+        run_name=f"seqgan_{Path(output_dir or seqgan_config['checkpoint_dir']).name}",
+        job_type="seqgan_train",
+        tags=["seqgan"],
+    )
 
     train_path = resolve_path(train_path or Path(config["data"]["processed_path"]) / config["data"]["train_file"])
     output_dir = ensure_dir(output_dir or resolve_path(seqgan_config["checkpoint_dir"]))
@@ -403,6 +421,7 @@ def train_seqgan(
         epochs=seqgan_config["pretrain_epochs_g"],
         device=device,
         gradient_clip_norm=seqgan_config["gradient_clip_norm"],
+        logger=logger,
     )
 
     discriminator_history = pretrain_discriminator(
@@ -415,6 +434,7 @@ def train_seqgan(
         bos_token_id=vocab.bos_token_id,
         seq_len=seqgan_config["seq_len"],
         lr=seqgan_config["lr_d"],
+        logger=logger,
     )
 
     rollout = RolloutPolicy(generator)
@@ -426,6 +446,7 @@ def train_seqgan(
         device=device,
         bos_token_id=vocab.bos_token_id,
         real_sequences=sequences,
+        logger=logger,
     )
 
     generated_texts = generate_fake_texts(output_dir, num_samples=min(32, len(texts))) if (output_dir / "seqgan.pt").exists() else [
@@ -457,6 +478,32 @@ def train_seqgan(
         config=config,
         metrics=metrics,
     )
+    image_paths = {
+        "seqgan_generator_pretrain_curve": plot_training_history(
+            generator_history,
+            Path(output_dir) / "seqgan_generator_pretrain_curve.png",
+            title="SeqGAN Generator Pretrain",
+        ),
+        "seqgan_discriminator_pretrain_curve": plot_training_history(
+            discriminator_history,
+            Path(output_dir) / "seqgan_discriminator_pretrain_curve.png",
+            title="SeqGAN Discriminator Pretrain",
+        ),
+        "seqgan_adversarial_curve": plot_training_history(
+            adversarial_history,
+            Path(output_dir) / "seqgan_adversarial_curve.png",
+            title="SeqGAN Adversarial Training",
+        ),
+    }
+    logger.log_metrics(metrics["generator"], prefix="seqgan_generator_summary")
+    logger.log_metrics(metrics["discriminator"], prefix="seqgan_discriminator_summary")
+    logger.log_metrics(metrics["adversarial"], prefix="seqgan_adversarial_summary")
+    logger.log_metrics(
+        {"bleu_like": metrics["bleu_like"], "perplexity_like": metrics["perplexity_like"]},
+        prefix="seqgan_eval",
+    )
+    logger.log_images_from_paths(image_paths)
+    logger.finish()
     LOGGER.info("SeqGAN training complete: %s", metrics)
     return {"output_dir": str(output_dir), "metrics": metrics}
 

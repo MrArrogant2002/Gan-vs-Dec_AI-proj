@@ -14,3 +14,6 @@ peft>=0.11.0
 evaluate>=0.4.1
 bert-score>=0.3.13
 safetensors>=0.4.2
+matplotlib>=3.8.0
+seaborn>=0.13.2
+python-dotenv>=1.0.1

@@ -4,6 +4,7 @@ project:
   seed: 42
   num_workers: 2
   device: "auto"
+  env_file: ".env"
 
 data:
   pubmed_path: "data/raw/pubmed_abstracts/pubmed_real.csv"
@@ -88,4 +89,16 @@ loop:
 
 evaluation:
   metrics_path: "experiments/metrics"
+  plots_path: "experiments/plots"
   log_predictions: true
+  save_plots: true
+  threshold: 0.5
+
+tracking:
+  use_wandb: true
+  wandb_project: "deepfake_robustness"
+  wandb_entity: ""
+  wandb_mode: "offline"
+  wandb_dir: "experiments/wandb"
+  log_tables: true
+  log_images: true

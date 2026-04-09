@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import random
 from contextlib import nullcontext
 from pathlib import Path
@@ -15,6 +16,18 @@ import yaml
 ROOT_DIR = Path(__file__).resolve().parents[1]
 
 
+def load_environment(env_path: str | Path | None = None) -> None:
+    candidate = resolve_path(env_path or ".env")
+    if not candidate.exists():
+        return
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(candidate, override=False)
+    except Exception:
+        return
+
+
 def configure_logging(level: int = logging.INFO) -> None:
     logging.basicConfig(
         level=level,
@@ -23,6 +36,7 @@ def configure_logging(level: int = logging.INFO) -> None:
 
 
 def load_config(path: str | Path) -> Dict[str, Any]:
+    load_environment()
     with Path(path).expanduser().open("r", encoding="utf-8") as handle:
         return yaml.safe_load(handle)
 
@@ -93,3 +107,10 @@ def flatten(list_of_lists: Iterable[Iterable[Any]]) -> List[Any]:
 
 def count_trainable_parameters(model: torch.nn.Module) -> int:
     return sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad)
+
+
+def get_env_or_default(name: str, default: Any = None) -> Any:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    return value
