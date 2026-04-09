@@ -1,0 +1,91 @@
+project:
+  name: "deepfake_robustness"
+  output_dir: "experiments"
+  seed: 42
+  num_workers: 2
+  device: "auto"
+
+data:
+  pubmed_path: "data/raw/pubmed_abstracts/pubmed_real.csv"
+  fake_path: "data/raw/med_mmhl/"
+  processed_path: "data/processed"
+  train_file: "train.csv"
+  val_file: "val.csv"
+  test_file: "test.csv"
+  text_columns:
+    - "abstract"
+    - "text"
+    - "content"
+  title_column: "title"
+  label_column: "label"
+  positive_label: 1
+  negative_label: 0
+  min_words: 50
+  max_length: 512
+  tokenizer_name: "dmis-lab/biobert-base-cased-v1.2"
+  use_model_tokenizer: true
+  train_split: 0.70
+  val_split: 0.15
+  test_split: 0.15
+
+seqgan:
+  vocab_size: 10000
+  embed_dim: 64
+  hidden_dim: 512
+  num_layers: 2
+  seq_len: 200
+  pretrain_epochs_g: 100
+  pretrain_epochs_d: 50
+  adversarial_epochs: 200
+  rollout_num: 16
+  batch_size: 32
+  lr_g: 0.0001
+  lr_d: 0.0001
+  generated_pool_size: 10000
+  temperature: 1.0
+  gradient_clip_norm: 5.0
+  checkpoint_dir: "models/seqgan/checkpoints"
+
+detector:
+  model_name: "dmis-lab/biobert-base-cased-v1.2"
+  num_labels: 2
+  max_length: 384
+  batch_size: 4
+  grad_accum_steps: 4
+  epochs_per_round: 5
+  lr: 0.00002
+  weight_decay: 0.01
+  warmup_ratio: 0.1
+  fp16: true
+  gradient_checkpointing: true
+  checkpoint_dir: "models/detector/checkpoints"
+
+agent:
+  model_name: "microsoft/biogpt"
+  checkpoint_dir: "agents/checkpoints"
+  evasion_threshold: 0.5
+  high_conf_threshold: 0.8
+  max_new_tokens: 192
+  temperature: 0.9
+  top_p: 0.95
+  lora_r: 8
+  lora_alpha: 32
+  lora_dropout: 0.05
+  finetune_epochs: 3
+  batch_size: 2
+  grad_accum_steps: 4
+  lr: 0.0001
+  max_length: 384
+  gradient_checkpointing: true
+  use_4bit: true
+
+loop:
+  num_rounds: 10
+  fake_pool_size: 1000
+  hard_sample_top_k: 200
+  save_checkpoint_every: 2
+  round_data_dir: "experiments/round_data"
+
+evaluation:
+  metrics_path: "experiments/metrics"
+  log_predictions: true
