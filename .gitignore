@@ -1,0 +1,30 @@
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments and env files
+.venv/
+venv/
+env/
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+run.ipynb
+
+# Build and packaging
+build/
+dist/
+*.egg-info/
+
+# Logs and runtime artifacts
+*.log
+wandb/
+
+# Model/data artifacts
+models/**/checkpoints/
+agents/checkpoints/
+data/raw/
+data/processed/
+experiments/
