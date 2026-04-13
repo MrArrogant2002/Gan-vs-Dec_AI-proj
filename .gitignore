@@ -9,9 +9,9 @@ venv/
 env/
 .env
 
+
 # Jupyter
 .ipynb_checkpoints/
-run.ipynb
 
 # Build and packaging
 build/
