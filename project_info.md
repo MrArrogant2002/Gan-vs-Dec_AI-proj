@@ -5,6 +5,24 @@
 **Deepfake Robustness Pipeline**  
 This repository studies adversarial robustness for **medical-text deepfake detection**.
 
+## Source Of Truth For The Reported Results
+
+The **reported results in this document are from [agent-run.ipynb](agent-run.ipynb)**.
+
+That notebook is the authoritative pipeline for:
+
+- the training run summarized in this document
+- the saved metric plots
+- the Google Drive artifacts
+- the Hugging Face model uploads
+
+Within the notebook:
+
+- the main experiment is run end-to-end in the Colab workflow cells
+- the final plots are produced in **Cell 14 — Results And Plots**
+- the Hugging Face model export is handled in **Cell 17 — Hugging Face Hub Export**
+- the Hub reload/sanity-check inference is handled in **Cell 18 — Load HF Models And Test Outputs**
+
 ## Project Goal
 
 The main research goal is to test whether an adversarial training loop can improve the robustness of a medical-text detector against machine-generated fake content.
@@ -16,13 +34,25 @@ The project combines:
 - an **adversarial agent** that rewrites fake text to evade the detector
 - an iterative **round-based retraining loop**
 
-## Important Project Variants
+## Primary Experimental Pipeline
 
-This repository now has **two closely related versions** of the pipeline:
+The primary experimental pipeline for this project is the standalone Colab notebook [agent-run.ipynb](agent-run.ipynb).
 
-### 1. Original modular codebase design
+That notebook uses:
 
-The main Python project in this repo is built around:
+- **GPT-2 Small** instead of SeqGAN for the generator role
+- **BioBERT** as the detector
+- **BioGPT + LoRA** as the adversarial agent
+- Google Drive for checkpoints and plots
+- Hugging Face Hub export/import cells
+
+The Hugging Face models listed below were uploaded from this notebook pipeline.
+
+## Repository Background
+
+The repository also contains the original modular codebase design, which is useful as a reference and for future extension.
+
+That background codebase is built around:
 
 - **SeqGAN** as the fake-text generator
 - **BioBERT** as the detector
@@ -37,18 +67,6 @@ This design is reflected in:
 - `agents/`
 - `training/`
 - `evaluation/`
-
-### 2. Colab-trained standalone notebook variant
-
-To make the project runnable on Colab with lighter operational requirements, `agent-run.ipynb` implements a standalone end-to-end notebook that uses:
-
-- **GPT-2 Small** instead of SeqGAN for the generator role
-- **BioBERT** as the detector
-- **BioGPT + LoRA** as the adversarial agent
-- Google Drive for checkpoints and plots
-- Hugging Face Hub export/import cells
-
-The Hugging Face models listed below were uploaded from this **Colab notebook variant**, not from the original full SeqGAN pipeline.
 
 ## Current Hugging Face Model Repositories
 
@@ -84,7 +102,7 @@ Can iterative adversarial training improve a detector's robustness on medical-te
 
 ## Data Preparation
 
-The project includes a reusable preprocessing pipeline in `data/prepare_data.py`.
+The Colab notebook contains its own inline data-preparation flow, and the repository also includes a reusable preprocessing pipeline in `data/prepare_data.py`.
 
 Implemented preprocessing steps include:
 
@@ -104,14 +122,11 @@ The default split ratios used across the project are:
 - validation: **15%**
 - test: **15%**
 
-## Model Roles
+## Model Roles In agent-run.ipynb
 
 ### Generator
 
-There are two generator paths in the repo:
-
-- **Original repo design:** SeqGAN
-- **Current Colab-trained artifact path:** GPT-2 Small fine-tuned for fake medical-style text generation
+- **Notebook run used for results:** GPT-2 Small fine-tuned for fake medical-style text generation
 
 ### Detector
 
@@ -125,6 +140,10 @@ There are two generator paths in the repo:
 - **Base model:** `microsoft/biogpt`
 - **Fine-tuning method:** LoRA adapters via `peft`
 - **Task:** rewrite high-confidence fake samples so they are harder for the detector to catch
+
+## Supporting Repository Code
+
+The repository still includes the broader modular implementation for future non-notebook workflows.
 
 ## Original Repository Structure
 
@@ -212,6 +231,17 @@ The current exported models are aligned with `agent-run.ipynb`, whose default se
 - fake pool size per round: **200**
 - top hard samples selected per round: **50**
 
+## Notebook Outputs And Saved Artifacts
+
+The `agent-run.ipynb` workflow saves and uses:
+
+- Drive-backed checkpoints for generator, detector, and agent artifacts
+- `metrics_log.csv` for round-level metrics
+- `plots/evasion_rate_vs_round.png`
+- `plots/auc_f1_vs_round.png`
+- `round_artifacts/round_*/` outputs such as rewrites, predictions, and per-round summaries
+- Hugging Face Hub uploads for the final generator, detector, and agent repositories
+
 ## Adversarial Training Workflow
 
 The implemented workflow is:
@@ -230,9 +260,9 @@ The implemented workflow is:
 
 ## Evaluation And Metrics
 
-The project supports both training-time and post-run evaluation.
+The reported experiment from `agent-run.ipynb` uses round-level evaluation and post-run plot generation.
 
-Implemented metrics/utilities in the modular codebase include:
+Metrics and utilities implemented across the repository include:
 
 - accuracy
 - precision
@@ -257,20 +287,19 @@ Implemented metrics/utilities in the modular codebase include:
 
 ## Experiment Tracking
 
-The modular codebase includes experiment-logging hooks in `training/experiment_logger.py`.
+For the reported notebook run, the primary tracking outputs are:
 
-Supported tracking features include:
+- Drive-saved checkpoints
+- `metrics_log.csv`
+- saved PNG plots
+- per-round JSON and CSV artifacts
+- Hugging Face Hub model repos
 
-- optional Weights & Biases initialization
-- no-op fallback if W&B is unavailable
-- metric logging
-- table logging
-- plot/image logging
-- distinct run types for detector, SeqGAN, agent, adversarial loop, and evaluation
+The repository also contains optional Weights & Biases hooks in `training/experiment_logger.py` for the modular Python workflow.
 
-## Result Summary From The Provided Plots
+## Result Summary From agent-run.ipynb
 
-The following summary is based on the two metric plots you provided:
+The following summary is based on the two metric plots produced by `agent-run.ipynb` and shared here:
 
 - `auc_f1_vs_round.png`
 - `evasion_rate_vs_round.png`
@@ -298,7 +327,7 @@ Based on these plots alone:
 - rounds 3 and 4 appear to be the strongest from an evasion-resistance perspective
 - the late-round F1 drop suggests some threshold-level classification behavior changed even though overall separability remained very high
 
-This suggests that the trained detector remained highly robust on the evaluated split, while the rewrite agent had only limited success in consistently fooling it.
+This suggests that, in the `agent-run.ipynb` experiment, the trained detector remained highly robust on the evaluated split, while the rewrite agent had only limited success in consistently fooling it.
 
 ## Current Project Status
 
@@ -326,18 +355,7 @@ This suggests that the trained detector remained highly robust on the evaluated 
 
 ## Reproduction Paths
 
-### Local modular-code path
-
-1. Create a Python environment
-2. Install `requirements.txt`
-3. Review `configs/config.yaml`
-4. Prepare datasets
-5. Train the baseline detector
-6. Train SeqGAN
-7. Run `training/adversarial_loop.py`
-8. Evaluate with the tools in `evaluation/`
-
-### Colab notebook path
+### Primary notebook path
 
 1. Open `agent-run.ipynb`
 2. Upload the fake-data folders if needed
@@ -348,12 +366,23 @@ This suggests that the trained detector remained highly robust on the evaluated 
 7. Upload trained components to Hugging Face Hub
 8. Reload them in the notebook for sanity-check inference
 
+### Secondary modular-code path
+
+1. Create a Python environment
+2. Install `requirements.txt`
+3. Review `configs/config.yaml`
+4. Prepare datasets
+5. Train the baseline detector
+6. Train SeqGAN
+7. Run `training/adversarial_loop.py`
+8. Evaluate with the tools in `evaluation/`
+
 ## Important Notes
 
-- The **original repo design** and the **current uploaded notebook artifacts** are related but not identical
-- The original codebase uses **SeqGAN**, but the current uploaded Hugging Face generator is **GPT-2 Small**
-- The current public model repos therefore reflect the **Colab-optimized implementation path**
-- Result interpretation here is based on the two uploaded metric plots and the repository configuration/code, not on a full external benchmark report
+- `agent-run.ipynb` is the source of truth for the results described in this file
+- the current public Hugging Face repos reflect the **notebook pipeline**, not the original SeqGAN training path
+- the original modular codebase remains important as project scaffolding and a broader research implementation
+- result interpretation here is based on the notebook outputs and the two uploaded metric plots, not on a separate external benchmark report
 
 ## Related Files In This Repository
 
@@ -363,4 +392,3 @@ This suggests that the trained detector remained highly robust on the evaluated 
 - `colab-build-plan.md`
 - `agent-run.ipynb`
 - `configs/config.yaml`
-
