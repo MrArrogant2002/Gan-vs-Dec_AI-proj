@@ -11,7 +11,7 @@ import torch
 
 from agents.adversarial_agent import AdversarialAgent, SuccessfulEvasionExample
 from evaluation.eval_pipeline import evaluate_detector_checkpoint
-from evaluation.metrics import compute_confidence_shift, compute_evasion_rate, compute_rewrite_quality, compute_robustness_delta
+from evaluation.metrics import compute_evasion_rate
 from evaluation.visualization import plot_round_metrics
 from models.detector.train_detector import score_texts, train_detector
 from models.seqgan.train_seqgan import generate_fake_texts, train_seqgan
@@ -104,7 +104,6 @@ def run_adversarial_loop(
         split_path=test_path,
         output_path=metrics_dir / "baseline_metrics.json",
     )
-    baseline_auc = baseline_metrics.get("auc", float("nan"))
     logger.log_metrics(baseline_metrics, step=0, prefix="loop")
 
     history = [baseline_metrics | {"round": 0}]
@@ -183,24 +182,6 @@ def run_adversarial_loop(
         round_metrics["evasion_rate"] = compute_evasion_rate(
             rewrite_frame["detector_confidence"].astype(float).tolist(),
             evasion_threshold=config["agent"]["evasion_threshold"],
-        )
-        round_metrics["rewrite_quality"] = compute_rewrite_quality(
-            rewrite_frame["original_text"].astype(str).tolist(),
-            rewrite_frame["rewritten_text"].astype(str).tolist(),
-        )
-        round_metrics.update(
-            compute_confidence_shift(
-                before=rewrite_frame["original_detector_confidence"].astype(float).tolist(),
-                after=rewrite_frame["detector_confidence"].astype(float).tolist(),
-            )
-        )
-        round_metrics["num_rewrites"] = int(len(rewrite_frame))
-        round_metrics["successful_evasions"] = int(
-            (rewrite_frame["detector_confidence"].astype(float) < config["agent"]["evasion_threshold"]).sum()
-        )
-        round_metrics["robustness_delta"] = compute_robustness_delta(
-            round_metrics.get("auc", float("nan")),
-            baseline_auc,
         )
         history.append(round_metrics)
         logger.log_metrics(round_metrics, step=round_index, prefix="loop")

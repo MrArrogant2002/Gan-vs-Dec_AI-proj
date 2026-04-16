@@ -2,313 +2,284 @@
 
 ## Project Name
 
-**Deepfake Robustness Pipeline**  
-This repository studies adversarial robustness for **medical-text deepfake detection**.
+**Deepfake Robustness Pipeline**
 
-## Source Of Truth For The Reported Results
+This project studies how to detect fake medical text and how to make that detector stronger against adversarial attacks.
 
-The **reported results in this document are from [agent-run.ipynb](agent-run.ipynb)**.
+## Source Of Truth
 
-That notebook is the authoritative pipeline for:
+The main results in this repository come from [agent-run.ipynb](agent-run.ipynb).
 
-- the training run summarized in this document
-- the saved metric plots
-- the Google Drive artifacts
-- the Hugging Face model uploads
+That notebook is the source of truth for:
 
-Within the notebook:
+- dataset loading in Colab
+- model training
+- adversarial rounds
+- final metric plots
+- saved Drive artifacts
+- Hugging Face model uploads
 
-- the main experiment is run end-to-end in the Colab workflow cells
-- the final plots are produced in **Cell 14 — Results And Plots**
-- the Hugging Face model export is handled in **Cell 17 — Hugging Face Hub Export**
-- the Hub reload/sanity-check inference is handled in **Cell 18 — Load HF Models And Test Outputs**
+The modular Python files in `training/`, `evaluation/`, `models/`, and `agents/` are still useful, but the reported run in this project is the notebook run.
 
-## Project Goal
+## Main Idea
 
-The main research goal is to test whether an adversarial training loop can improve the robustness of a medical-text detector against machine-generated fake content.
+The project has three main models:
 
-The project combines:
+- a **generator** that writes fake medical-style text
+- a **detector** that decides whether a text is real or fake
+- an **adversarial agent** that rewrites fake text to make it harder for the detector to catch
 
-- a **generator** that produces fake medical-style text
-- a **detector** that classifies text as real or fake
-- an **adversarial agent** that rewrites fake text to evade the detector
-- an iterative **round-based retraining loop**
+The goal is not just to build a detector once. The real goal is to repeat this process for multiple rounds so the detector keeps seeing stronger attacks and becomes more robust.
 
-## Primary Experimental Pipeline
+## Simple End-To-End Flow
 
-The primary experimental pipeline for this project is the standalone Colab notebook [agent-run.ipynb](agent-run.ipynb).
+1. Load **real medical text** from the PubMed subset.
+2. Let the user upload **fake medical-news text** folders such as `fakenews_article` and `sentence`.
+3. Clean both real and fake text.
+4. Give labels:
+   `0` = real
+   `1` = fake
+5. Split the data into train, validation, and test sets.
+6. Fine-tune GPT-2 on fake training text so it can generate more fake medical-style samples.
+7. Fine-tune BioBERT on labeled real + fake text so it can classify text as real or fake.
+8. Generate a pool of fake samples with GPT-2.
+9. Score those samples with the detector.
+10. Pick the fake samples the detector is most confident are fake.
+11. Rewrite those samples with BioGPT + LoRA so they sound more natural and are harder to catch.
+12. Score the rewritten texts again.
+13. Add successful rewritten fake samples back into detector training.
+14. Retrain the detector.
+15. Repeat for about 5 rounds.
 
-That notebook uses:
+## How Real PubMed Data Is Used
 
-- **GPT-2 Small** instead of SeqGAN for the generator role
-- **BioBERT** as the detector
-- **BioGPT + LoRA** as the adversarial agent
-- Google Drive for checkpoints and plots
-- Hugging Face Hub export/import cells
+Real PubMed data is very important in this project.
 
-The Hugging Face models listed below were uploaded from this notebook pipeline.
+It is used in these ways:
 
-## Repository Background
+- It provides the **real class** for the detector.
+- It teaches the detector what real medical writing looks like.
+- It gives the project domain-specific language, such as medical terms, abstract structure, and scientific style.
+- It is included in validation and test evaluation, so the detector is checked against real medical text and fake medical text together.
 
-The repository also contains the original modular codebase design, which is useful as a reference and for future extension.
+In simple words:
 
-That background codebase is built around:
+- PubMed data shows the detector what genuine medical writing looks like.
+- Without it, the detector would not know what “real” means.
 
-- **SeqGAN** as the fake-text generator
-- **BioBERT** as the detector
-- **BioGPT** as the adversarial rewrite agent
-- a modular training pipeline in `training/adversarial_loop.py`
+## How Fake Data Enters The Project
 
-This design is reflected in:
+Fake data comes from two places.
 
-- `configs/config.yaml`
-- `models/seqgan/`
-- `models/detector/`
-- `agents/`
-- `training/`
-- `evaluation/`
+### 1. User-uploaded fake dataset
 
-## Current Hugging Face Model Repositories
+The notebook first looks for uploaded folders such as:
 
-The trained artifacts pushed to Hugging Face are:
+- `fakenews_article`
+- `sentence`
 
-| Component | Hugging Face Repository |
-| --- | --- |
-| GPT-2 generator | https://huggingface.co/Mr-Arr0gant/gan-vs-det-ai-gpt2-generator |
-| BioBERT detector | https://huggingface.co/Mr-Arr0gant/gan-vs-det-ai-biobert-detector |
-| BioGPT agent | https://huggingface.co/Mr-Arr0gant/gan-vs-det-ai-biogpt-agent |
+These files act as the starting fake dataset. They are labeled as fake and used in training.
 
-## Core Research Question
+### 2. Model-generated fake data
 
-Can iterative adversarial training improve a detector's robustness on medical-text deepfakes by exposing it to progressively harder generated and rewritten attacks?
+After the first dataset is prepared, GPT-2 is fine-tuned on the fake training text and then used to generate new fake samples.
 
-## Dataset Sources
+Later, the adversarial BioGPT agent rewrites some of those fake samples again, producing even stronger fake examples.
 
-### Real data
+So fake data in the full pipeline is:
 
-- **PubMed Abstracts Subset**
-- Source: Hugging Face dataset `slinusc/PubMedAbstractsSubset`
-- In the Colab notebook variant, the dataset is streamed and capped at **2000 usable rows** by default
-- Label used for real samples: **0**
+- original uploaded fake text
+- GPT-2 generated fake text
+- BioGPT rewritten adversarial fake text
 
-### Fake data
+## How The Fake Text Becomes More Realistic
 
-- **Med-MMHL / uploaded fake-news folders**
-- In the Colab notebook flow, the notebook first checks for uploaded folders such as:
-  - `fakenews_article`
-  - `sentence`
-- If those are not present, it falls back to the public Med-MMHL repository
-- Label used for fake samples: **1**
+The fake text becomes more realistic step by step.
 
-## Data Preparation
+- The uploaded fake dataset already has medical-domain wording, so it gives the project a useful starting style.
+- GPT-2 learns sentence flow, wording patterns, and structure from the fake training texts.
+- GPT-2 then generates fresh fake medical-style text instead of only reusing the uploaded examples.
+- BioGPT rewrites selected fake text to make it smoother and less obviously fake.
+- Those rewrites often reduce the detector's confidence, which means the text looks more convincing to the model.
 
-The Colab notebook contains its own inline data-preparation flow, and the repository also includes a reusable preprocessing pipeline in `data/prepare_data.py`.
+In simple words:
 
-Implemented preprocessing steps include:
+- GPT-2 creates new fake text.
+- BioGPT polishes some of that fake text to make it harder to detect.
 
-- HTML unescaping
-- HTML tag stripping
-- Unicode normalization
-- whitespace cleanup
-- empty-row filtering
-- minimum word-count filtering
-- duplicate removal using SHA-256 hashing
-- token-aware truncation when a tokenizer is available
-- stratified train/validation/test split creation
+## How GPT-2 Is Trained In This Project
 
-The default split ratios used across the project are:
+In the notebook run, GPT-2 is fine-tuned on the **fake training texts**, not on PubMed.
 
-- train: **70%**
-- validation: **15%**
-- test: **15%**
+The training idea is simple:
 
-## Model Roles In agent-run.ipynb
+- GPT-2 reads fake text token by token.
+- At each step, it tries to predict the next token.
+- The notebook compares GPT-2’s prediction with the real next token from the training text.
+- The prediction error becomes the loss.
+- Backpropagation updates the model weights.
+
+After many training steps, GPT-2 learns the writing style of the fake medical dataset.
+
+Then, during generation:
+
+- the notebook gives GPT-2 a short prompt
+- GPT-2 continues the text
+- this produces a new fake medical-style sample
+
+So GPT-2 is learning:
+
+- how fake medical text is usually written
+- how to produce new text in a similar style
+
+## How BioBERT Is Trained In This Project
+
+BioBERT is the detector.
+
+Its job is different from GPT-2.
+
+- GPT-2 learns how to **write**
+- BioBERT learns how to **judge**
+
+BioBERT training works like this:
+
+- each text has a label
+- `0` means real
+- `1` means fake
+- BioBERT reads the text and outputs scores for the two classes
+- those scores become probabilities
+- the predicted result is compared with the true label
+- the difference becomes the classification loss
+- backpropagation updates the detector weights
+
+After training, BioBERT learns patterns such as:
+
+- what real PubMed-style text looks like
+- what fake medical-news text looks like
+- what machine-generated text tends to look like
+
+## How The Adversarial Agent Works
+
+The adversarial agent uses **BioGPT + LoRA**.
+
+It does not create the first fake text from scratch. Instead, it rewrites selected fake samples.
+
+The notebook does this:
+
+- it scores generated fake texts with the current detector
+- it chooses the samples the detector is most confident are fake
+- it sends those samples to BioGPT
+- BioGPT rewrites them so they sound more natural and less suspicious
+- the detector scores the rewritten versions again
+
+If a rewritten sample drops below the fake threshold, it counts as a successful evasion.
+
+Those successful evasions are then added back into detector training. This is what makes the loop adversarial.
+
+## Why The Loop Improves Robustness
+
+The loop helps because the detector is not trained only on easy fake examples.
+
+Instead, it keeps seeing harder cases:
+
+- generated fake text
+- rewritten fake text
+- successful evasions from earlier rounds
+
+This forces the detector to adapt to stronger attacks over time.
+
+## Essential Metrics Used Now
+
+The project now uses a very small metric set on purpose.
+
+The main metrics are:
+
+- **AUC**
+- **F1**
+- **evasion_rate**
+
+### What each metric means
+
+- **AUC** tells us how well the detector separates real and fake texts across thresholds.
+- **F1** tells us how well the detector balances precision and recall at the chosen decision threshold.
+- **evasion_rate** tells us how often rewritten fake samples successfully slipped past the detector.
+
+These are the files aligned to this smaller metric policy:
+
+- [agent-run.ipynb](agent-run.ipynb)
+- [evaluation/metrics.py](evaluation/metrics.py)
+- [evaluation/visualization.py](evaluation/visualization.py)
+- [evaluation/eval_pipeline.py](evaluation/eval_pipeline.py)
+- [training/adversarial_loop.py](training/adversarial_loop.py)
+
+The notebook still keeps `status` internally for resume and error handling, but the user-facing results focus on the three metrics above.
+
+## Datasets Used In The Notebook
+
+### Real dataset
+
+- Source: `slinusc/PubMedAbstractsSubset`
+- Accessed from Hugging Face in the notebook
+- Used as the real class
+
+### Fake dataset
+
+- Main user flow: upload fake folders in Colab
+- Expected folders include `fakenews_article` and `sentence`
+- Fallback source: Med-MMHL-style fake medical misinformation content
+- Used as the fake class
+
+## Default Notebook Setup
+
+The main notebook run is designed for Colab and uses a lighter setup.
 
 ### Generator
 
-- **Notebook run used for results:** GPT-2 Small fine-tuned for fake medical-style text generation
+- model: `gpt2`
+- role: generate fake medical-style text
 
 ### Detector
 
-- **Model family:** BioBERT
-- **Base model:** `dmis-lab/biobert-base-cased-v1.2`
-- **Task:** binary classification of medical text as real or fake
+- model: `dmis-lab/biobert-base-cased-v1.2`
+- role: classify real vs fake
 
 ### Adversarial agent
 
-- **Model family:** BioGPT
-- **Base model:** `microsoft/biogpt`
-- **Fine-tuning method:** LoRA adapters via `peft`
-- **Task:** rewrite high-confidence fake samples so they are harder for the detector to catch
+- model: `microsoft/biogpt`
+- tuning method: LoRA
+- role: rewrite fake text to evade detection
 
-## Supporting Repository Code
+### Adversarial loop
 
-The repository still includes the broader modular implementation for future non-notebook workflows.
+- default rounds: 5
+- fake pool per round: 200
+- top selected hard samples: 50
 
-## Original Repository Structure
+## Hugging Face Model Repositories
 
-### Configuration
+The current notebook-trained models were pushed to these repositories:
 
-- `configs/config.yaml`
+- GPT-2 generator: https://huggingface.co/Mr-Arr0gant/gan-vs-det-ai-gpt2-generator
+- BioBERT detector: https://huggingface.co/Mr-Arr0gant/gan-vs-det-ai-biobert-detector
+- BioGPT agent: https://huggingface.co/Mr-Arr0gant/gan-vs-det-ai-biogpt-agent
 
-### Data
+## Results From The Notebook Run
 
-- `data/download_pubmed.py`
-- `data/download_medfake.py`
-- `data/prepare_data.py`
-
-### Detector
-
-- `models/detector/train_detector.py`
-
-### SeqGAN
-
-- `models/seqgan/generator.py`
-- `models/seqgan/discriminator.py`
-- `models/seqgan/rollout.py`
-- `models/seqgan/train_seqgan.py`
-
-### Adversarial agent
-
-- `agents/prompts.py`
-- `agents/adversarial_agent.py`
-
-### Training loop and utilities
-
-- `training/adversarial_loop.py`
-- `training/utils.py`
-- `training/experiment_logger.py`
-
-### Evaluation
-
-- `evaluation/metrics.py`
-- `evaluation/visualization.py`
-- `evaluation/eval_pipeline.py`
-
-## Colab Notebook Pipeline Used For Current Uploaded Models
-
-The current exported models are aligned with `agent-run.ipynb`, whose default settings are:
-
-### Data settings
-
-- PubMed real data path: `data/raw/pubmed_real.csv`
-- Fake data path: `data/raw/med_mmhl`
-- max real samples: **2000**
-- max sequence length: **256**
-- minimum word count: **50**
-
-### Generator settings
-
-- model: **gpt2**
-- batch size: **8**
-- fine-tuning epochs: **3**
-- learning rate: **2e-5**
-- max new tokens: **150**
-
-### Detector settings
-
-- model: **dmis-lab/biobert-base-cased-v1.2**
-- batch size: **8**
-- max length: **256**
-- epochs per round: **3**
-- learning rate: **2e-5**
-
-### Agent settings
-
-- model: **microsoft/biogpt**
-- LoRA rank: **8**
-- LoRA alpha: **16**
-- LoRA dropout: **0.05**
-- batch size: **4**
-- fine-tuning epochs: **2**
-- learning rate: **1e-4**
-- evasion threshold: **0.5**
-- high-confidence threshold: **0.8**
-
-### Adversarial loop settings
-
-- number of rounds: **5**
-- fake pool size per round: **200**
-- top hard samples selected per round: **50**
-
-## Notebook Outputs And Saved Artifacts
-
-The `agent-run.ipynb` workflow saves and uses:
-
-- Drive-backed checkpoints for generator, detector, and agent artifacts
-- `metrics_log.csv` for round-level metrics
-- `plots/evasion_rate_vs_round.png`
-- `plots/auc_f1_vs_round.png`
-- `round_artifacts/round_*/` outputs such as rewrites, predictions, and per-round summaries
-- Hugging Face Hub uploads for the final generator, detector, and agent repositories
-
-## Adversarial Training Workflow
-
-The implemented workflow is:
-
-1. Prepare real and fake text data
-2. Fine-tune the baseline detector
-3. Fine-tune the generator
-4. Generate a fake text pool
-5. Score generated texts with the detector
-6. Select hard samples with high fake confidence
-7. Rewrite hard samples with the BioGPT agent
-8. Re-score rewritten texts
-9. Add successful evasions back into training
-10. Retrain the detector
-11. Repeat for multiple rounds
-
-## Evaluation And Metrics
-
-The reported experiment from `agent-run.ipynb` uses round-level evaluation and post-run plot generation.
-
-Metrics and utilities implemented across the repository include:
-
-- accuracy
-- precision
-- recall
-- specificity
-- F1
-- AUC
-- PR-AUC
-- balanced accuracy
-- MCC
-- Brier score
-- log loss
-- TP / TN / FP / FN
-- evasion rate
-- robustness delta
-- confidence-shift tracking
-- rewrite quality scoring
-- confusion matrix generation
-- ROC curve generation
-- precision-recall plotting
-- confidence histograms
-
-## Experiment Tracking
-
-For the reported notebook run, the primary tracking outputs are:
-
-- Drive-saved checkpoints
-- `metrics_log.csv`
-- saved PNG plots
-- per-round JSON and CSV artifacts
-- Hugging Face Hub model repos
-
-The repository also contains optional Weights & Biases hooks in `training/experiment_logger.py` for the modular Python workflow.
-
-## Result Summary From agent-run.ipynb
-
-The following summary is based on the two metric plots produced by `agent-run.ipynb` and shared here:
+The result summary below comes from the plots saved by `agent-run.ipynb`:
 
 - `auc_f1_vs_round.png`
 - `evasion_rate_vs_round.png`
 
-### AUC and F1 trend
+### AUC trend
 
-- **AUC** stays essentially flat at about **1.00** from round 0 through round 5
-- **F1** stays around **0.985** from round 0 through round 3
-- **F1** drops to about **0.9705** at rounds 4 and 5
+- AUC stays essentially at **1.00** across the rounds.
+- This means the detector keeps very strong ranking power between real and fake samples.
+
+### F1 trend
+
+- F1 stays around **0.985** from round 0 to round 3.
+- F1 drops to about **0.9705** at rounds 4 and 5.
+- This suggests the detector stays very strong overall, but threshold-based decisions become a little less clean in later rounds.
 
 ### Evasion-rate trend
 
@@ -318,77 +289,37 @@ The following summary is based on the two metric plots produced by `agent-run.ip
 - round 4: **0.00**
 - round 5: about **0.02**
 
-### Practical interpretation
+### Simple interpretation
 
-Based on these plots alone:
+- The detector remained very strong during the run.
+- The adversarial agent had only limited success.
+- Some rewritten samples did fool the detector, but the success rate stayed low.
+- The detector adapted well enough that evasion never became a large problem in this experiment.
 
-- the detector remained extremely strong in terms of ranking quality, since AUC stayed near perfect
-- the adversarial agent achieved only a **low evasion rate overall**
-- rounds 3 and 4 appear to be the strongest from an evasion-resistance perspective
-- the late-round F1 drop suggests some threshold-level classification behavior changed even though overall separability remained very high
+## Main Files In The Repository
 
-This suggests that, in the `agent-run.ipynb` experiment, the trained detector remained highly robust on the evaluated split, while the rewrite agent had only limited success in consistently fooling it.
+### Notebook path used for the reported run
 
-## Current Project Status
+- [agent-run.ipynb](agent-run.ipynb)
+- [colab-build-plan.md](colab-build-plan.md)
 
-### Implemented
+### Shared evaluation and training files
 
-- modular repo structure
-- configuration system
-- data pipeline
-- BioBERT detector code
-- SeqGAN code
-- BioGPT adversarial-agent code
-- adversarial loop
-- evaluation utilities
-- Colab standalone notebook
-- Hugging Face Hub upload and reload cells
+- [evaluation/metrics.py](evaluation/metrics.py)
+- [evaluation/visualization.py](evaluation/visualization.py)
+- [evaluation/eval_pipeline.py](evaluation/eval_pipeline.py)
+- [training/adversarial_loop.py](training/adversarial_loop.py)
 
-### Already completed in the Colab workflow
+### Background modular code
 
-- standalone Colab notebook implementation
-- dataset acquisition helpers
-- metrics plotting
-- Hugging Face upload cells
-- Hugging Face reload/test cells
-- model export to the three Hugging Face repos listed above
-
-## Reproduction Paths
-
-### Primary notebook path
-
-1. Open `agent-run.ipynb`
-2. Upload the fake-data folders if needed
-3. Stream PubMed subset data
-4. Run generator, detector, and BioGPT sections
-5. Run the adversarial loop
-6. Save plots and artifacts to Drive
-7. Upload trained components to Hugging Face Hub
-8. Reload them in the notebook for sanity-check inference
-
-### Secondary modular-code path
-
-1. Create a Python environment
-2. Install `requirements.txt`
-3. Review `configs/config.yaml`
-4. Prepare datasets
-5. Train the baseline detector
-6. Train SeqGAN
-7. Run `training/adversarial_loop.py`
-8. Evaluate with the tools in `evaluation/`
+- `models/seqgan/`
+- `models/detector/`
+- `agents/`
+- `data/`
+- `configs/config.yaml`
 
 ## Important Notes
 
-- `agent-run.ipynb` is the source of truth for the results described in this file
-- the current public Hugging Face repos reflect the **notebook pipeline**, not the original SeqGAN training path
-- the original modular codebase remains important as project scaffolding and a broader research implementation
-- result interpretation here is based on the notebook outputs and the two uploaded metric plots, not on a separate external benchmark report
-
-## Related Files In This Repository
-
-- `README.md`
-- `implementation-complete.md`
-- `agent-build-plan.md`
-- `colab-build-plan.md`
-- `agent-run.ipynb`
-- `configs/config.yaml`
+- The notebook run is the main experimental path for this project.
+- The uploaded Hugging Face models come from the notebook pipeline, not from a separate SeqGAN training run.
+- The repository still contains the older modular SeqGAN-based structure, but the current reported results are from the Colab notebook workflow.

@@ -10,9 +10,8 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 import seaborn as sns
-from sklearn.metrics import confusion_matrix, precision_recall_curve, roc_curve
+from sklearn.metrics import confusion_matrix, roc_curve
 
 from training.utils import ensure_dir
 
@@ -53,8 +52,8 @@ def plot_round_metrics(history: Sequence[dict], output_dir: str | Path) -> Dict[
     image_paths: Dict[str, Path] = {}
 
     metric_groups = {
-        "round_performance": ["auc", "f1", "accuracy", "balanced_accuracy"],
-        "round_robustness": ["evasion_rate", "rewrite_quality", "robustness_delta"],
+        "round_performance": ["auc", "f1"],
+        "round_robustness": ["evasion_rate"],
     }
     for name, keys in metric_groups.items():
         available = [key for key in keys if any(key in row for row in history)]
@@ -134,50 +133,6 @@ def plot_roc(
     return output_path
 
 
-def plot_precision_recall(
-    labels: Sequence[int],
-    probabilities: Sequence[float],
-    output_path: str | Path,
-    title: str = "Precision-Recall Curve",
-) -> Path:
-    _style()
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    precision, recall, _ = precision_recall_curve(labels, probabilities)
-
-    plt.figure(figsize=(7, 6))
-    plt.plot(recall, precision, label="PR")
-    plt.title(title)
-    plt.xlabel("Recall")
-    plt.ylabel("Precision")
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=200)
-    plt.close()
-    return output_path
-
-
-def plot_probability_histogram(
-    labels: Sequence[int],
-    probabilities: Sequence[float],
-    output_path: str | Path,
-    title: str = "Prediction Confidence Distribution",
-) -> Path:
-    _style()
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    frame = pd.DataFrame({"label": labels, "probability": probabilities})
-    frame["label_name"] = frame["label"].map({0: "Real", 1: "Fake"})
-
-    plt.figure(figsize=(8, 6))
-    sns.histplot(data=frame, x="probability", hue="label_name", bins=20, kde=True, stat="density", common_norm=False)
-    plt.title(title)
-    plt.xlabel("Predicted Fake Probability")
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=200)
-    plt.close()
-    return output_path
-
-
 def generate_classification_plots(
     labels: Sequence[int],
     probabilities: Sequence[float],
@@ -188,13 +143,7 @@ def generate_classification_plots(
     output_dir = ensure_dir(output_dir)
     paths = {
         f"{prefix}_confusion_matrix": plot_confusion_heatmap(labels, predictions, output_dir / f"{prefix}_confusion_matrix.png"),
-        f"{prefix}_confidence_histogram": plot_probability_histogram(
-            labels,
-            probabilities,
-            output_dir / f"{prefix}_confidence_histogram.png",
-        ),
     }
     if len(set(labels)) > 1:
         paths[f"{prefix}_roc_curve"] = plot_roc(labels, probabilities, output_dir / f"{prefix}_roc_curve.png")
-        paths[f"{prefix}_pr_curve"] = plot_precision_recall(labels, probabilities, output_dir / f"{prefix}_pr_curve.png")
     return paths

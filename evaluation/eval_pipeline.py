@@ -11,7 +11,6 @@ from evaluation.metrics import (
     build_prediction_rows,
     compute_classification_metrics,
     compute_evasion_rate,
-    compute_rewrite_quality,
 )
 from evaluation.visualization import generate_classification_plots
 from models.detector.train_detector import load_predictor
@@ -57,10 +56,6 @@ def evaluate_detector_checkpoint(
             metrics["evasion_rate"] = compute_evasion_rate(
                 rewrite_frame["detector_confidence"].astype(float).tolist(),
                 evasion_threshold=config["agent"]["evasion_threshold"],
-            )
-            metrics["rewrite_quality"] = compute_rewrite_quality(
-                rewrite_frame["original_text"].astype(str).tolist(),
-                rewrite_frame["rewritten_text"].astype(str).tolist(),
             )
 
     image_paths = {}
