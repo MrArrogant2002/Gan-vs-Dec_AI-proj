@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import html
 import logging
+import math
 import re
 import unicodedata
 from pathlib import Path
@@ -236,9 +237,12 @@ def prepare_data(config: dict) -> dict:
     label_candidates = data_config.get("source_label_candidates", [data_config.get("label_column", "label")])
     positive_label = int(data_config.get("positive_label", 1))
     negative_label = int(data_config.get("negative_label", 0))
+    article_min_words = int(data_config.get("article_min_words", data_config.get("min_words", 50)))
+    sentence_min_words = int(data_config.get("sentence_min_words", data_config.get("min_words", 50)))
+    pubmed_reference_min_words = int(data_config.get("pubmed_reference_min_words", data_config.get("min_words", 50)))
 
     LOGGER.info("Loading labeled detector dataset from %s", detector_source_path)
-    detector_frames = [
+    article_frame = clean_frame(
         standardize_frame(
             load_source(detector_source_path),
             text_candidates=text_candidates,
@@ -246,28 +250,32 @@ def prepare_data(config: dict) -> dict:
             positive_label=positive_label,
             negative_label=negative_label,
             label_candidates=label_candidates,
-        )
-    ]
+        ),
+        min_words=article_min_words,
+        max_length=data_config["max_length"],
+        tokenizer=tokenizer,
+    )
+    detector_frames = [article_frame]
     if data_config.get("use_sentence_dataset", False) and sentence_path is not None:
         LOGGER.info("Merging optional sentence dataset from %s", sentence_path)
         detector_frames.append(
-            standardize_frame(
-                load_source(sentence_path),
-                text_candidates=text_candidates,
-                title_column=title_column,
-                positive_label=positive_label,
-                negative_label=negative_label,
-                label_candidates=label_candidates,
+            clean_frame(
+                standardize_frame(
+                    load_source(sentence_path),
+                    text_candidates=text_candidates,
+                    title_column=title_column,
+                    positive_label=positive_label,
+                    negative_label=negative_label,
+                    label_candidates=label_candidates,
+                ),
+                min_words=sentence_min_words,
+                max_length=data_config["max_length"],
+                tokenizer=tokenizer,
             )
         )
 
     detector_frame = pd.concat(detector_frames, ignore_index=True)
-    detector_frame = clean_frame(
-        detector_frame,
-        min_words=data_config["min_words"],
-        max_length=data_config["max_length"],
-        tokenizer=tokenizer,
-    )
+    detector_frame = detector_frame.drop_duplicates(subset="text").reset_index(drop=True)
 
     LOGGER.info("Split cleaned detector dataset into train/val/test.")
     train_frame, val_frame, test_frame = split_frame(
@@ -301,7 +309,7 @@ def prepare_data(config: dict) -> dict:
     )
     pubmed_reference = clean_frame(
         pubmed_reference,
-        min_words=data_config["min_words"],
+        min_words=pubmed_reference_min_words,
         max_length=data_config["max_length"],
         tokenizer=tokenizer,
     )
@@ -322,6 +330,9 @@ def prepare_data(config: dict) -> dict:
         "detector_label_distribution": train_frame["label"].value_counts().sort_index().to_dict(),
         "detector_source_path": str(detector_source_path),
         "sentence_dataset_used": bool(data_config.get("use_sentence_dataset", False) and sentence_path is not None),
+        "article_min_words": article_min_words,
+        "sentence_min_words": sentence_min_words,
+        "pubmed_reference_min_words": pubmed_reference_min_words,
         "generator_train_path": str(generator_train_path),
         "pubmed_reference_path": str(pubmed_reference_path),
         "output_dir": str(output_dir),

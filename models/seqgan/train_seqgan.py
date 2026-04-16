@@ -401,6 +401,11 @@ def train_seqgan(
         label_column=data_config.get("label_column", "label"),
         positive_label=int(data_config.get("positive_label", 1)),
     )
+    if not texts:
+        raise ValueError(
+            f"No generator training texts were found in {train_path}. "
+            "Check the fake-label filtering and preprocessing thresholds."
+        )
     vocab = build_vocab(texts, vocab_size=seqgan_config["vocab_size"])
     sequences = prepare_sequences(texts, vocab=vocab, seq_len=seqgan_config["seq_len"])
 

@@ -156,6 +156,18 @@ PubMed is used as:
 - a biomedical writing reference corpus
 - future support for extra evaluation or domain-specific comparisons
 
+## Source-Specific Cleaning Rules
+
+The current preprocessing no longer uses one hard filter for every dataset.
+
+Instead, it uses source-specific thresholds:
+
+- `fakenews_article` keeps article-style rows with a lower minimum length than before
+- `sentence` can use a much smaller threshold when enabled
+- `PubMed` keeps a stricter threshold because it is used as a cleaner reference corpus
+
+This helps avoid throwing away too much useful article data while still filtering out obvious junk.
+
 ## How GPT-2 Is Trained Now
 
 GPT-2 is trained only on the **fake rows** from the article dataset.
@@ -207,6 +219,8 @@ The loop is:
 6. Successful evasions are added back into detector training.
 
 This makes the detector progressively harder to fool.
+
+The current loop now keeps those successful adversarial rewrites **cumulatively across rounds** instead of only using the latest round’s successful examples.
 
 ## Why This New Strategy Is Better
 

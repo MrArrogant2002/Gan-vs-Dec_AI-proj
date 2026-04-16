@@ -112,7 +112,9 @@ class AdversarialAgent:
         self.config = config
         self.agent_config = config["agent"]
         self.device = get_device(config["project"].get("device", "auto"))
+        self.checkpoint_dir = resolve_path(checkpoint_dir) if checkpoint_dir else None
         self.tokenizer = AutoTokenizer.from_pretrained(self.agent_config["model_name"])
+        self.tokenizer.padding_side = "left"
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
@@ -125,9 +127,9 @@ class AdversarialAgent:
 
         self.model = AutoModelForCausalLM.from_pretrained(self.agent_config["model_name"], **model_kwargs)
 
-        if checkpoint_dir and resolve_path(checkpoint_dir).exists() and PeftModel is not None:
+        if self.checkpoint_dir and self.checkpoint_dir.exists() and PeftModel is not None:
             try:
-                self.model = PeftModel.from_pretrained(self.model, resolve_path(checkpoint_dir))
+                self.model = PeftModel.from_pretrained(self.model, self.checkpoint_dir)
             except Exception:
                 pass
 
@@ -224,14 +226,17 @@ class AdversarialAgent:
             model.gradient_checkpointing_enable()
             model.config.use_cache = False
 
-        lora_config = LoraConfig(
-            r=self.agent_config["lora_r"],
-            lora_alpha=self.agent_config["lora_alpha"],
-            lora_dropout=self.agent_config["lora_dropout"],
-            bias="none",
-            task_type=TaskType.CAUSAL_LM,
-        )
-        model = get_peft_model(model, lora_config)
+        if self.checkpoint_dir and self.checkpoint_dir.exists() and PeftModel is not None:
+            model = PeftModel.from_pretrained(model, self.checkpoint_dir, is_trainable=True)
+        else:
+            lora_config = LoraConfig(
+                r=self.agent_config["lora_r"],
+                lora_alpha=self.agent_config["lora_alpha"],
+                lora_dropout=self.agent_config["lora_dropout"],
+                bias="none",
+                task_type=TaskType.CAUSAL_LM,
+            )
+            model = get_peft_model(model, lora_config)
         trainable_parameters = count_trainable_parameters(model)
 
         dataset = PromptResponseDataset(
@@ -279,6 +284,7 @@ class AdversarialAgent:
 
         model.save_pretrained(output_dir)
         self.tokenizer.save_pretrained(output_dir)
+        self.checkpoint_dir = Path(output_dir)
         image_paths = {
             "agent_finetune_curve": plot_training_history(
                 epoch_history,
@@ -310,7 +316,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the BioGPT adversarial agent.")
     parser.add_argument("--config", default="configs/config.yaml", help="Path to the YAML configuration file.")
     parser.add_argument("--mode", choices=["rewrite", "generate"], required=True, help="Agent mode to run.")
-    parser.add_argument("--text", nargs="+", required=True, help="Input abstract(s) or topic(s).")
+    parser.add_argument("--text", nargs="+", required=True, help="Input article text(s) or topic(s).")
     parser.add_argument("--checkpoint-dir", default=None, help="Optional fine-tuned checkpoint directory.")
     return parser.parse_args()
 

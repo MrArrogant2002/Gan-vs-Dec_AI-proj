@@ -50,11 +50,23 @@ def build_augmented_split(
     if not adversarial_samples:
         return train_frame.copy()
 
+    unique_samples: List[str] = []
+    seen = set(train_frame["text"].astype(str).tolist())
+    for sample in adversarial_samples:
+        normalized = str(sample).strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique_samples.append(normalized)
+
+    if not unique_samples:
+        return train_frame.copy()
+
     adversarial_frame = pd.DataFrame(
         {
-            "title": [""] * len(adversarial_samples),
-            "text": adversarial_samples,
-            "label": [1] * len(adversarial_samples),
+            "title": [""] * len(unique_samples),
+            "text": unique_samples,
+            "label": [1] * len(unique_samples),
         }
     )
     return pd.concat([train_frame, adversarial_frame], ignore_index=True)
@@ -109,6 +121,7 @@ def run_adversarial_loop(
     history = [baseline_metrics | {"round": 0}]
     current_detector_checkpoint = detector_checkpoint
     current_agent_checkpoint = agent_checkpoint
+    cumulative_successful_rewrites: List[str] = []
 
     for round_index in range(1, loop_config["num_rounds"] + 1):
         LOGGER.info("Starting adversarial round %s", round_index)
@@ -156,7 +169,18 @@ def run_adversarial_loop(
         )
         rewrite_frame.to_csv(round_dir / "rewrites.csv", index=False)
 
-        augmented_train = build_augmented_split(train_frame, rewritten_samples)
+        successful_examples = [
+            {
+                "original_text": row["original_text"],
+                "adversarial_text": row["rewritten_text"],
+                "detector_confidence": row["detector_confidence"],
+            }
+            for _, row in rewrite_frame.iterrows()
+            if row["detector_confidence"] < config["agent"]["evasion_threshold"]
+        ]
+        cumulative_successful_rewrites.extend(example["adversarial_text"] for example in successful_examples)
+
+        augmented_train = build_augmented_split(train_frame, cumulative_successful_rewrites)
         augmented_train_path = round_dir / "train_augmented.csv"
         augmented_train.to_csv(augmented_train_path, index=False)
 
@@ -187,15 +211,6 @@ def run_adversarial_loop(
         logger.log_metrics(round_metrics, step=round_index, prefix="loop")
         logger.log_dataframe(f"round_{round_index:02d}_rewrites", rewrite_frame)
 
-        successful_examples = [
-            {
-                "original_text": row["original_text"],
-                "adversarial_text": row["rewritten_text"],
-                "detector_confidence": row["detector_confidence"],
-            }
-            for _, row in rewrite_frame.iterrows()
-            if row["detector_confidence"] < config["agent"]["evasion_threshold"]
-        ]
         if successful_examples:
             agent = AdversarialAgent(config=config, checkpoint_dir=current_agent_checkpoint)
             current_agent_checkpoint = ensure_dir(resolve_path(config["agent"]["checkpoint_dir"]) / f"round_{round_index:02d}")
