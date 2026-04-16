@@ -124,10 +124,16 @@ def build_vocab(texts: Sequence[str], vocab_size: int) -> Vocabulary:
     return Vocabulary(stoi=stoi, itos=itos)
 
 
-def load_training_texts(train_path: str | Path) -> List[str]:
+def load_training_texts(
+    train_path: str | Path,
+    label_column: str = "label",
+    positive_label: int = 1,
+) -> List[str]:
     frame = pd.read_csv(train_path)
     if "text" not in frame.columns:
         raise ValueError(f"{train_path} must contain a 'text' column.")
+    if label_column in frame.columns:
+        frame = frame[frame[label_column].astype(int) == int(positive_label)].copy()
     return frame["text"].dropna().astype(str).tolist()
 
 
@@ -385,10 +391,16 @@ def train_seqgan(
         tags=["seqgan"],
     )
 
-    train_path = resolve_path(train_path or Path(config["data"]["processed_path"]) / config["data"]["train_file"])
+    data_config = config["data"]
+    generator_train_file = data_config.get("generator_train_file", data_config["train_file"])
+    train_path = resolve_path(train_path or Path(data_config["processed_path"]) / generator_train_file)
     output_dir = ensure_dir(output_dir or resolve_path(seqgan_config["checkpoint_dir"]))
 
-    texts = load_training_texts(train_path)
+    texts = load_training_texts(
+        train_path,
+        label_column=data_config.get("label_column", "label"),
+        positive_label=int(data_config.get("positive_label", 1)),
+    )
     vocab = build_vocab(texts, vocab_size=seqgan_config["vocab_size"])
     sequences = prepare_sequences(texts, vocab=vocab, seq_len=seqgan_config["seq_len"])
 

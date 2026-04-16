@@ -29,6 +29,13 @@ def discover_text_column(frame: pd.DataFrame, candidates: Sequence[str]) -> str:
     raise ValueError(f"No text column found in columns={list(frame.columns)}")
 
 
+def discover_optional_column(frame: pd.DataFrame, candidates: Sequence[str]) -> Optional[str]:
+    for column in candidates:
+        if column in frame.columns:
+            return column
+    return None
+
+
 def normalize_text(text: str) -> str:
     cleaned = html.unescape(str(text))
     cleaned = HTML_TAG_PATTERN.sub(" ", cleaned)
@@ -76,17 +83,69 @@ def load_source(path: Path) -> pd.DataFrame:
     raise ValueError(f"Unsupported source format: {path}")
 
 
+def normalize_binary_labels(
+    values: pd.Series,
+    positive_label: int,
+    negative_label: int,
+) -> pd.Series:
+    numeric_values = pd.to_numeric(values, errors="coerce")
+    if numeric_values.notna().all():
+        return numeric_values.astype(int)
+
+    positive_tokens = {
+        str(positive_label).strip().lower(),
+        "1",
+        "true",
+        "fake",
+        "synthetic",
+        "generated",
+        "yes",
+    }
+    negative_tokens = {
+        str(negative_label).strip().lower(),
+        "0",
+        "false",
+        "real",
+        "human",
+        "authentic",
+        "no",
+    }
+
+    normalized = values.astype(str).str.strip().str.lower().map(
+        lambda value: positive_label if value in positive_tokens else negative_label if value in negative_tokens else math.nan
+    )
+    return normalized.astype("float")
+
+
 def standardize_frame(
     frame: pd.DataFrame,
     text_candidates: Sequence[str],
-    label: int,
     title_column: str,
+    positive_label: int,
+    negative_label: int,
+    label_candidates: Sequence[str] | None = None,
+    fallback_label: Optional[int] = None,
 ) -> pd.DataFrame:
     text_column = discover_text_column(frame, text_candidates)
     standardized = pd.DataFrame()
     standardized["text"] = frame[text_column].astype(str)
     standardized["title"] = frame[title_column].astype(str) if title_column in frame.columns else ""
-    standardized["label"] = label
+    label_column = discover_optional_column(frame, label_candidates or [])
+    if label_column is not None:
+        standardized["label"] = normalize_binary_labels(
+            frame[label_column],
+            positive_label=positive_label,
+            negative_label=negative_label,
+        )
+        standardized = standardized.dropna(subset=["label"]).copy()
+        standardized["label"] = standardized["label"].astype(int)
+    elif fallback_label is not None:
+        standardized["label"] = fallback_label
+    else:
+        raise ValueError(
+            "No label column found and no fallback_label provided. "
+            f"Columns={list(frame.columns)} candidates={list(label_candidates or [])}"
+        )
     return standardized
 
 
@@ -157,32 +216,62 @@ def prepare_data(config: dict) -> dict:
     set_seed(config["project"]["seed"])
 
     pubmed_path = resolve_path(data_config["pubmed_path"])
-    fake_path = resolve_path(data_config["fake_path"])
+    detector_source_path = resolve_path(data_config.get("detector_source_path", data_config.get("fake_path", "")))
+    sentence_path_value = data_config.get("sentence_path")
+    sentence_path = resolve_path(sentence_path_value) if sentence_path_value else None
     output_dir = ensure_dir(resolve_path(data_config["processed_path"]))
+    generator_train_path = output_dir / data_config.get("generator_train_file", "generator_train_fake.csv")
+    pubmed_reference_path = output_dir / data_config.get("pubmed_reference_file", "pubmed_reference.csv")
 
     if not pubmed_path.exists():
         raise FileNotFoundError(f"Real dataset not found: {pubmed_path}")
-    if not fake_path.exists():
-        raise FileNotFoundError(f"Fake dataset not found: {fake_path}")
+    if not detector_source_path.exists():
+        raise FileNotFoundError(f"Detector dataset not found: {detector_source_path}")
+    if data_config.get("use_sentence_dataset", False) and sentence_path is not None and not sentence_path.exists():
+        raise FileNotFoundError(f"Sentence dataset not found: {sentence_path}")
 
     tokenizer = load_tokenizer_if_enabled(config)
     text_candidates = data_config.get("text_columns", ["abstract", "text", "content"])
     title_column = data_config.get("title_column", "title")
+    label_candidates = data_config.get("source_label_candidates", [data_config.get("label_column", "label")])
+    positive_label = int(data_config.get("positive_label", 1))
+    negative_label = int(data_config.get("negative_label", 0))
 
-    LOGGER.info("Loading raw data.")
-    real_frame = standardize_frame(load_source(pubmed_path), text_candidates, label=0, title_column=title_column)
-    fake_frame = standardize_frame(load_source(fake_path), text_candidates, label=1, title_column=title_column)
-    merged = pd.concat([real_frame, fake_frame], ignore_index=True)
-    merged = clean_frame(
-        merged,
+    LOGGER.info("Loading labeled detector dataset from %s", detector_source_path)
+    detector_frames = [
+        standardize_frame(
+            load_source(detector_source_path),
+            text_candidates=text_candidates,
+            title_column=title_column,
+            positive_label=positive_label,
+            negative_label=negative_label,
+            label_candidates=label_candidates,
+        )
+    ]
+    if data_config.get("use_sentence_dataset", False) and sentence_path is not None:
+        LOGGER.info("Merging optional sentence dataset from %s", sentence_path)
+        detector_frames.append(
+            standardize_frame(
+                load_source(sentence_path),
+                text_candidates=text_candidates,
+                title_column=title_column,
+                positive_label=positive_label,
+                negative_label=negative_label,
+                label_candidates=label_candidates,
+            )
+        )
+
+    detector_frame = pd.concat(detector_frames, ignore_index=True)
+    detector_frame = clean_frame(
+        detector_frame,
         min_words=data_config["min_words"],
         max_length=data_config["max_length"],
         tokenizer=tokenizer,
     )
 
-    LOGGER.info("Split cleaned dataset into train/val/test.")
+    LOGGER.info("Split cleaned detector dataset into train/val/test.")
     train_frame, val_frame, test_frame = split_frame(
-        merged,
+        detector_frame,
         train_ratio=data_config["train_split"],
         val_ratio=data_config["val_split"],
         test_ratio=data_config["test_split"],
@@ -198,10 +287,43 @@ def prepare_data(config: dict) -> dict:
     val_frame.to_csv(split_paths["val"], index=False)
     test_frame.to_csv(split_paths["test"], index=False)
 
+    generator_train = train_frame[train_frame["label"] == positive_label].reset_index(drop=True)
+    generator_train.to_csv(generator_train_path, index=False)
+
+    LOGGER.info("Preparing PubMed reference dataset from %s", pubmed_path)
+    pubmed_reference = standardize_frame(
+        load_source(pubmed_path),
+        text_candidates=text_candidates,
+        title_column=title_column,
+        positive_label=positive_label,
+        negative_label=negative_label,
+        fallback_label=negative_label,
+    )
+    pubmed_reference = clean_frame(
+        pubmed_reference,
+        min_words=data_config["min_words"],
+        max_length=data_config["max_length"],
+        tokenizer=tokenizer,
+    )
+    max_pubmed_reference_samples = data_config.get("max_pubmed_reference_samples")
+    if max_pubmed_reference_samples:
+        pubmed_reference = pubmed_reference.sample(
+            min(len(pubmed_reference), int(max_pubmed_reference_samples)),
+            random_state=config["project"]["seed"],
+        ).reset_index(drop=True)
+    pubmed_reference.to_csv(pubmed_reference_path, index=False)
+
     summary = {
         "train_samples": len(train_frame),
         "val_samples": len(val_frame),
         "test_samples": len(test_frame),
+        "generator_train_samples": len(generator_train),
+        "pubmed_reference_samples": len(pubmed_reference),
+        "detector_label_distribution": train_frame["label"].value_counts().sort_index().to_dict(),
+        "detector_source_path": str(detector_source_path),
+        "sentence_dataset_used": bool(data_config.get("use_sentence_dataset", False) and sentence_path is not None),
+        "generator_train_path": str(generator_train_path),
+        "pubmed_reference_path": str(pubmed_reference_path),
         "output_dir": str(output_dir),
     }
     LOGGER.info("Prepared dataset: %s", summary)

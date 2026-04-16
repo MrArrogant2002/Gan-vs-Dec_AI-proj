@@ -8,21 +8,29 @@ project:
 
 data:
   pubmed_path: "data/raw/pubmed_abstracts/pubmed_real.csv"
-  fake_path: "data/raw/med_mmhl/"
+  detector_source_path: "data/raw/fakenews_article"
+  sentence_path: "data/raw/sentence"
+  use_sentence_dataset: false
   processed_path: "data/processed"
   train_file: "train.csv"
   val_file: "val.csv"
   test_file: "test.csv"
+  generator_train_file: "generator_train_fake.csv"
+  pubmed_reference_file: "pubmed_reference.csv"
   text_columns:
     - "abstract"
     - "text"
     - "content"
   title_column: "title"
   label_column: "label"
+  source_label_candidates:
+    - "det_fake_label"
+    - "label"
   positive_label: 1
   negative_label: 0
   min_words: 50
   max_length: 512
+  max_pubmed_reference_samples: 2000
   tokenizer_name: "dmis-lab/biobert-base-cased-v1.2"
   use_model_tokenizer: true
   train_split: 0.70
